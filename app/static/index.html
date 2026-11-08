@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FDE Production RAG v2.0 Console</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #0b0f19; color: #e2e8f0; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    .glass { background: rgba(17, 24, 39, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .citation-badge { background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; padding: 1px 6px; border-radius: 4px; font-size: 0.78rem; font-weight: 600; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- Top Telemetry & Credentials Bar -->
+  <header class="glass sticky top-0 z-20 px-6 py-3 flex flex-wrap items-center justify-between gap-4 border-b border-slate-800">
+    <div class="flex items-center gap-3">
+      <div class="h-3 w-3 rounded-full bg-emerald-400 animate-pulse"></div>
+      <h1 class="text-lg font-bold tracking-tight text-white">
+        FDE Production RAG <span class="text-sky-400">v2.0</span>
+        <span class="text-xs font-normal text-emerald-300 bg-emerald-950/60 border border-emerald-800 px-2 py-0.5 rounded ml-2">BM25 + Vector RRF + Reranker + RBAC</span>
+      </h1>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-3 text-sm">
+      <select id="providerSelect" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:border-sky-500">
+        <option value="gemini">Google Gemini (gemini-3.6-flash)</option>
+        <option value="openai">OpenAI (gpt-4o-mini)</option>
+      </select>
+      <input id="apiKeyInput" type="password" placeholder="Optional: Paste API Key override (or use .env)" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 w-72 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500" />
+    </div>
+  </header>
+
+  <!-- Main 3-Column FDE Layout -->
+  <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 max-w-[1650px] w-full mx-auto">
+
+    <!-- Left Column: Document Ingestion & RBAC Metadata Tagging (3 cols) -->
+    <section class="lg:col-span-3 flex flex-col gap-5">
+      <div class="glass rounded-xl p-5 flex flex-col gap-3.5">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">1. Ingest & Tag Document (RBAC)</h2>
+
+        <label id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-sky-500 transition rounded-xl p-5 text-center cursor-pointer flex flex-col items-center justify-center gap-2 bg-slate-900/50">
+          <svg class="w-7 h-7 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+          <span id="fileNameLabel" class="text-xs font-medium text-slate-300">Click to select PDF, DOCX, or TXT</span>
+          <input id="fileInput" type="file" accept=".pdf,.docx,.txt,.md" class="hidden" />
+        </label>
+
+        <!-- RBAC Metadata Tags Assigned at Ingestion -->
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <label class="text-slate-400 block mb-1">Doc Department</label>
+            <select id="ingestDept" class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-slate-200">
+              <option value="general">General (All)</option>
+              <option value="engineering">Engineering</option>
+              <option value="finance">Finance</option>
+              <option value="hr">HR & People</option>
+              <option value="legal">Legal</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Security Clearance</label>
+            <select id="ingestClearance" class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-slate-200">
+              <option value="public">1 - Public</option>
+              <option value="internal" selected>2 - Internal</option>
+              <option value="confidential">3 - Confidential</option>
+              <option value="restricted">4 - Restricted (Exec)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <label class="text-slate-400 block mb-1">Chunk Size</label>
+            <input id="chunkSizeInput" type="number" value="700" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200" />
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Overlap</label>
+            <input id="chunkOverlapInput" type="number" value="120" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200" />
+          </div>
+        </div>
+
+        <button id="uploadBtn" onclick="uploadDocument()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2 px-4 rounded-lg text-sm transition">
+          Tag, Chunk & Embed Document
+        </button>
+
+        <div id="ingestStatus" class="text-xs text-slate-400 hidden"></div>
+      </div>
+
+      <!-- Indexed Knowledge Base Card -->
+      <div class="glass rounded-xl p-5 flex-1 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Indexed Knowledge Base</h2>
+            <span id="totalChunksBadge" class="text-xs bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded font-mono">0 chunks</span>
+          </div>
+          <ul id="docList" class="space-y-2 text-xs text-slate-300 max-h-60 overflow-y-auto">
+            <li class="text-slate-500 italic">No documents indexed yet.</li>
+          </ul>
+        </div>
+
+        <button onclick="clearIndex()" class="mt-4 w-full border border-rose-800/70 hover:bg-rose-950/50 text-rose-300 text-xs py-1.5 rounded-lg transition">
+          Purge Vector Index
+        </button>
+      </div>
+    </section>
+
+    <!-- Center Column: Production Chat + Active User RBAC Simulator (5 cols) -->
+    <section class="lg:col-span-5 glass rounded-xl p-5 flex flex-col h-[84vh]">
+      <div class="pb-3 border-b border-slate-800 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">2. RBAC Simulator & Grounded Q&A</h2>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="text-slate-400">Top-K:</span>
+            <input id="topKInput" type="number" value="4" min="1" max="10" class="w-12 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center text-slate-200" />
+          </div>
+        </div>
+
+        <!-- Active User RBAC Filter Bar -->
+        <div class="grid grid-cols-3 gap-2 bg-slate-900/90 border border-slate-800 p-2.5 rounded-lg text-xs">
+          <div>
+            <label class="text-[11px] text-sky-400 font-semibold block mb-1">Active User Dept</label>
+            <select id="userDeptSelect" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200">
+              <option value="all" selected>All Departments (Admin)</option>
+              <option value="engineering">Engineering</option>
+              <option value="finance">Finance</option>
+              <option value="hr">HR & People</option>
+              <option value="legal">Legal</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[11px] text-emerald-400 font-semibold block mb-1">User Clearance</label>
+            <select id="userClearanceSelect" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200">
+              <option value="public">1 - Public Only (Intern)</option>
+              <option value="internal">2 - Internal (Staff)</option>
+              <option value="confidential">3 - Confidential (Manager)</option>
+              <option value="restricted" selected>4 - Restricted (Exec)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[11px] text-amber-400 font-semibold block mb-1">Filter by File</label>
+            <select id="sourceFilterSelect" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200">
+              <option value="all">All Indexed Files</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Messages Feed -->
+      <div id="chatFeed" class="flex-1 overflow-y-auto py-4 space-y-4 pr-1">
+        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 text-sm text-slate-300">
+          <p class="font-semibold text-sky-400 mb-1">FDE Production RAG v2.0 Active</p>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            • <strong>RBAC Pre-Filtering:</strong> Tag documents by Department & Clearance on the left, then test what an Intern (`Public`) vs. Exec (`Restricted`) can retrieve using the bar above.<br/>
+            • <strong>True Hybrid Search + Reranker:</strong> Combines Dense Cosine Vectors + Sparse Okapi BM25 via Reciprocal Rank Fusion (RRF), then runs Stage-2 Precision Reranking.
+          </p>
+        </div>
+      </div>
+
+      <!-- Input Box -->
+      <form onsubmit="askQuestion(event)" class="pt-3 border-t border-slate-800 flex gap-2">
+        <input id="questionInput" type="text" placeholder="Ask a question (tests RBAC filter + Hybrid RRF + Reranker)..." class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500" />
+        <button id="askBtn" type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition">
+          Ask
+        </button>
+      </form>
+    </section>
+
+    <!-- Right Column: FDE Observability & Reranked Chunks Inspector (4 cols) -->
+    <section class="lg:col-span-4 glass rounded-xl p-5 flex flex-col h-[84vh]">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">3. Hybrid + Rerank Telemetry</h2>
+        <span id="rbacBadge" class="text-[11px] font-mono bg-slate-900 border border-slate-700 text-slate-300 px-2 py-0.5 rounded">RBAC: Ready</span>
+      </div>
+
+      <!-- 4-Metric Latency Bar -->
+      <div class="grid grid-cols-4 gap-2 my-3">
+        <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2 text-center">
+          <span class="text-[10px] text-slate-400 block">Hybrid RRF</span>
+          <span id="metricRetrieval" class="text-xs font-mono font-bold text-emerald-400">— ms</span>
+        </div>
+        <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2 text-center">
+          <span class="text-[10px] text-slate-400 block">Reranker</span>
+          <span id="metricRerank" class="text-xs font-mono font-bold text-purple-400">— ms</span>
+        </div>
+        <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2 text-center">
+          <span class="text-[10px] text-slate-400 block">LLM Gen</span>
+          <span id="metricLLM" class="text-xs font-mono font-bold text-sky-400">— ms</span>
+        </div>
+        <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2 text-center">
+          <span class="text-[10px] text-slate-400 block">Total E2E</span>
+          <span id="metricTotal" class="text-xs font-mono font-bold text-amber-400">— ms</span>
+        </div>
+      </div>
+
+      <!-- Retrieved Chunks Cards -->
+      <div id="chunksInspector" class="flex-1 overflow-y-auto space-y-3 pr-1 text-xs">
+        <div class="text-slate-500 italic text-center mt-12">Reranked chunks, Vector vs. BM25 scores, and RBAC tags will appear here after your query.</div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const fileNameLabel = document.getElementById('fileNameLabel');
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) {
+        fileNameLabel.textContent = fileInput.files[0].name;
+        fileNameLabel.classList.add('text-sky-400');
+      }
+    });
+
+    async function refreshStatus() {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      document.getElementById('totalChunksBadge').textContent = `${data.total_chunks} chunks`;
+      const docList = document.getElementById('docList');
+      const sourceSelect = document.getElementById('sourceFilterSelect');
+
+      if (data.documents.length === 0) {
+        docList.innerHTML = '<li class="text-slate-500 italic">No documents indexed yet.</li>';
+        sourceSelect.innerHTML = '<option value="all">All Indexed Files</option>';
+      } else {
+        docList.innerHTML = data.documents.map(d =>
+          `<li class="bg-slate-900/80 border border-slate-800 px-3 py-2 rounded-lg space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="truncate pr-2 font-medium text-slate-200">${d.name}</span>
+              <span class="text-sky-400 font-mono shrink-0">${d.chunks}c</span>
+            </div>
+            <div class="flex items-center gap-1.5 text-[10px]">
+              <span class="bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded uppercase">${d.department}</span>
+              <span class="bg-amber-950/80 text-amber-300 border border-amber-800/60 px-1.5 py-0.5 rounded uppercase">${d.clearance}</span>
+            </div>
+          </li>`
+        ).join('');
+
+        sourceSelect.innerHTML = '<option value="all">All Indexed Files</option>' +
+          data.documents.map(d => `<option value="${d.name}">${d.name}</option>`).join('');
+      }
+    }
+
+    async function uploadDocument() {
+      if (!fileInput.files.length) {
+        alert('Please select a PDF, DOCX, or TXT file first.');
+        return;
+      }
+      const btn = document.getElementById('uploadBtn');
+      const statusEl = document.getElementById('ingestStatus');
+      btn.disabled = true;
+      btn.textContent = 'Tagging & Embedding...';
+      statusEl.classList.remove('hidden');
+      statusEl.textContent = 'Parsing pages, tagging RBAC metadata, and computing vectors...';
+
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('provider', document.getElementById('providerSelect').value);
+      formData.append('api_key', document.getElementById('apiKeyInput').value);
+      formData.append('chunk_size', document.getElementById('chunkSizeInput').value);
+      formData.append('chunk_overlap', document.getElementById('chunkOverlapInput').value);
+      formData.append('department', document.getElementById('ingestDept').value);
+      formData.append('clearance', document.getElementById('ingestClearance').value);
+
+      try {
+        const res = await fetch('/api/ingest', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ingestion failed');
+
+        statusEl.innerHTML = `<span class="text-emerald-400 font-semibold">✔ Indexed ${data.stats.chunks_added} chunks [${data.stats.department.toUpperCase()} / ${data.stats.clearance.toUpperCase()}] in ${data.stats.ingest_time_ms} ms</span>`;
+        await refreshStatus();
+      } catch (err) {
+        statusEl.innerHTML = `<span class="text-rose-400">✖ ${err.message}</span>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Tag, Chunk & Embed Document';
+      }
+    }
+
+    async function askQuestion(e) {
+      e.preventDefault();
+      const qInput = document.getElementById('questionInput');
+      const question = qInput.value.trim();
+      if (!question) return;
+
+      const userDept = document.getElementById('userDeptSelect').value;
+      const userClearance = document.getElementById('userClearanceSelect').value;
+      const sourceFilter = document.getElementById('sourceFilterSelect').value;
+
+      const chatFeed = document.getElementById('chatFeed');
+      chatFeed.innerHTML += `
+        <div class="flex flex-col items-end gap-1">
+          <div class="bg-sky-600 text-white rounded-xl px-4 py-2.5 text-sm max-w-[85%]">${question}</div>
+          <span class="text-[10px] text-slate-500 font-mono">Role: Dept=${userDept.toUpperCase()} | Clearance=${userClearance.toUpperCase()}</span>
+        </div>
+      `;
+      qInput.value = '';
+      chatFeed.scrollTop = chatFeed.scrollHeight;
+
+      const askBtn = document.getElementById('askBtn');
+      askBtn.disabled = true;
+      askBtn.textContent = '...';
+
+      try {
+        const res = await fetch('/api/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question,
+            top_k: parseInt(document.getElementById('topKInput').value || '4', 10),
+            user_department: userDept,
+            user_clearance: userClearance,
+            source_filter: sourceFilter,
+            provider: document.getElementById('providerSelect').value,
+            api_key: document.getElementById('apiKeyInput').value
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Query failed');
+
+        const formattedAnswer = data.answer
+          .replace(/\n/g, '<br/>')
+          .replace(/\[Source (\d+)\]/g, '<span class="citation-badge">[Source $1]</span>');
+
+        chatFeed.innerHTML += `
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-sm text-slate-200 leading-relaxed">
+            ${formattedAnswer}
+          </div>
+        `;
+        chatFeed.scrollTop = chatFeed.scrollHeight;
+
+        // Update Telemetry
+        document.getElementById('metricRetrieval').textContent = `${data.metrics.retrieval_ms} ms`;
+        document.getElementById('metricRerank').textContent = `${data.metrics.rerank_ms || 0} ms`;
+        document.getElementById('metricLLM').textContent = `${data.metrics.llm_ms} ms`;
+        document.getElementById('metricTotal').textContent = `${data.metrics.total_ms} ms`;
+        document.getElementById('rbacBadge').textContent =
+          `RBAC: ${data.metrics.chunks_searched} allowed | ${data.metrics.rbac_blocked || 0} blocked`;
+
+        // Render Reranked Chunks
+        const inspector = document.getElementById('chunksInspector');
+        if (!data.citations || data.citations.length === 0) {
+          inspector.innerHTML = '<div class="text-amber-400/80 italic text-center mt-8">0 authorized chunks matched your RBAC permissions.</div>';
+        } else {
+          inspector.innerHTML = data.citations.map(c => `
+            <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="citation-badge">Source ${c.rank}</span>
+                <span class="font-mono text-[11px] text-purple-300 font-semibold">Rerank: ${c.score} <span class="text-slate-400 font-normal">(Vec: ${c.semantic_score} | BM25: ${c.bm25_score})</span></span>
+              </div>
+              <div class="flex items-center justify-between text-[11px] text-slate-400">
+                <span>📄 ${c.source} — <strong class="text-slate-200">Page ${c.page}</strong></span>
+                <span class="uppercase font-mono text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-emerald-300">${c.department} · ${c.clearance}</span>
+              </div>
+              <p class="text-slate-300 text-xs leading-relaxed bg-slate-950/70 p-2.5 rounded border border-slate-800/80">${c.text}</p>
+            </div>
+          `).join('');
+        }
+      } catch (err) {
+        chatFeed.innerHTML += `
+          <div class="bg-rose-950/60 border border-rose-800 text-rose-200 rounded-xl p-3 text-xs">
+            ✖ Error: ${err.message}
+          </div>
+        `;
+      } finally {
+        askBtn.disabled = false;
+        askBtn.textContent = 'Ask';
+      }
+    }
+
+    async function clearIndex() {
+      if (!confirm('Clear all indexed documents and vectors?')) return;
+      await fetch('/api/clear', { method: 'DELETE' });
+      await refreshStatus();
+      document.getElementById('chunksInspector').innerHTML = '<div class="text-slate-500 italic text-center mt-12">Index cleared.</div>';
+    }
+
+    refreshStatus();
+  </script>
+</body>
+</html>
